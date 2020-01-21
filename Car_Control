@@ -1,0 +1,481 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.UI;
+
+
+public class Car_Control : MonoBehaviour
+{
+    public WheelCollider FL_Wheel, FR_Wheel, RL_Wheel, RR_Wheel;
+    public GameObject FL, FR, RL, RR;
+    private GameObject autoToggle, manualToggle;
+
+    private int count; //counts number of "enter" key presses to determine if auto mode should be on or off
+    public float topSpeed = 250f;
+    public float maxTorque = 200f;
+    public float maxSteerAngle = 45f;
+    public float currentSpeed;
+    public float maxBrakeTorque = 2200f;
+
+    public float Forward; //Reverse = -1, Forward = 1. Value between -1 and 1. Use to control the vehicle through script. Can also use intermediate value to partially turn
+    public float Turn; // Turn left = -1, Turn right = 1
+    public float Brake; // Brake applied = 1, No brake = 0
+
+    public bool parkAssist = false; //User input enables parking mode
+    public bool spotFound = false; //Flag for triggering parking procedure
+    public bool beginParking = false; //When true bypasses other operations that would otherwise hinder the parking process
+    public bool finalApproach = false; //Begins operation to center car between front and back vehicles in parking spot when true
+    private float positionError; //Checks difference between front and rear sensors on final approach
+
+    public Vector3 origin; //Establishing coordinate system using front car as a reference to execute parking maneuver
+    public float dist;
+
+    [Header("Sensors")] //Sensor control
+
+    private float sensorHeight = 0.75f; //Linked to all sensors since it assumed they should all be the same height. Create a new variable if different heights are desired   
+
+    public float FDistance = 3.4f; //Front middle sensor distance
+    public float FRDistance = 1.75f; //Front right sensor distance
+    public float FLDistance = 1.75f; //Front left sensor distance
+    public float MRDistance = 1.75f; //Middle right sensor distance
+    public float MLDistance = 1.75f; //Middle left sensor distance
+    public float RDistance = 3.4f; //Rear middle sensor distance
+    public float RRDistance = 1.75f; //Rear right sensor distance
+    public float RLDistance = 1.75f; //Rear left sensor distance
+
+    public float parkApproach; //Straightens out car when it guesses that there may be a spot ahead
+    public float carSurfing; //Keeps car straight relative to car beside it
+
+    //Used with version 1 of sensor array (single raycast)
+    private float frontSensorLength = 4.83f;
+    private float frontSideSensorLength = 3.91f;
+    private float midSensorLength = 2.9f;
+    private float rearSensorLength = 5.6f;
+    private float rearSideSensorLength = 4.59f;
+
+    public float frontSensorAngle = 30f; //Angle of front corner sensors
+    public float rearSensorAngle = 160f; //Angle of rear corner sensors
+
+    private Rigidbody rb;
+
+
+    // Start is called before the first frame update
+    void Start()
+    {
+        rb = GetComponent<Rigidbody>();
+        autoToggle = GameObject.Find("Auto Park");
+        manualToggle = GameObject.Find("Manual");
+
+
+    }
+
+    // Update is called once per frame
+    void FixedUpdate()
+    {
+
+        ConeSensors();
+
+        Forward = Input.GetAxis("Vertical");
+        Turn = Input.GetAxis("Horizontal");
+        Brake = Input.GetAxis("Jump");
+
+        if (Input.GetKeyDown("k"))
+        {
+            count++;
+
+            if (count % 2 == 1) //number of times "k" has been pressed is odd
+            {
+                parkAssist = true;
+                AutoTrue();
+                ManualFalse();
+            }
+            else
+            {
+                parkAssist = false;
+                AutoFalse();
+                ManualTrue();
+            }
+        }
+
+        if (parkAssist == true) //Turn on or off auto parking with UI toggle button
+        {
+            AutonomousParking(); //Enables Autonomous Mode
+        }
+        if (parkAssist == false)
+        {
+            spotFound = false;
+            beginParking = false;
+            finalApproach = false;
+        }
+
+        FL_Wheel.steerAngle = maxSteerAngle * Turn;
+        FR_Wheel.steerAngle = maxSteerAngle * Turn;
+
+        currentSpeed = 2 * 22 / 7 * RL_Wheel.radius * RL_Wheel.rpm * 60 / 1000; //Speed in Km/h
+
+        if (currentSpeed < topSpeed)
+        {
+            RL_Wheel.motorTorque = maxTorque * Forward;
+            RR_Wheel.motorTorque = maxTorque * Forward;
+        }
+
+        RL_Wheel.brakeTorque = maxBrakeTorque * Brake;
+        RR_Wheel.brakeTorque = maxBrakeTorque * Brake;
+        FL_Wheel.brakeTorque = maxBrakeTorque * Brake;
+        FR_Wheel.brakeTorque = maxBrakeTorque * Brake;
+    }
+
+    public void AutoTrue() //Turns autonomous toggle switch on
+    {
+        autoToggle.GetComponent<Toggle>().isOn = true;
+    }
+
+    public void AutoFalse() //Turns autonomous toggle switch on
+    {
+        autoToggle.GetComponent<Toggle>().isOn = false;
+    }
+
+    public void ManualTrue() //Turns manual toggle switch on
+    {
+        manualToggle.GetComponent<Toggle>().isOn = true;
+    }
+
+
+    public void ManualFalse() //Turns manual toggle switch off
+    {
+        manualToggle.GetComponent<Toggle>().isOn = false;
+    }
+
+
+    private void AutonomousParking()
+
+    {
+        if ((FRDistance < 1.75f || MRDistance < 1.75f)  && spotFound == false && beginParking == false && finalApproach == false) //Keeps car a set distance from obstacles while searching for a place to park
+        {
+            carSurfing = FRDistance - MRDistance;
+            Forward = 0.5f;
+      
+
+            if (currentSpeed > 2.5) //Limiting max speed so car can stop when needed
+            {
+                Forward = 0;
+            }
+
+            if (MRDistance > 1.25f && MRDistance < 1.75f)
+            {
+                Turn = 0.25f;
+            }
+
+            
+            if (FRDistance < 1.75f && MRDistance < 1.75f)
+            {
+                if (MRDistance > 0.55)
+                {
+                    Turn = 0.75f;
+                    Forward = 0.5f;
+
+                    if (currentSpeed > 2.5) //Limiting max speed so car can stop when needed
+                    {
+                        Forward = 0;
+                    }
+                }
+                if (MRDistance < 0.45)
+                {
+                    Turn = -0.75f;
+                    Forward = 0.5f;
+
+                    if (currentSpeed > 2.5) //Limiting max speed so car can stop when needed
+                    {
+                        Forward = 0;
+                    }
+                }
+                if (carSurfing < 0.225f)
+                {
+                    Turn = -0.25f;
+                    Forward = 0.5f;
+
+                    if (currentSpeed > 2.5) //Limiting max speed so car can stop when needed
+                    {
+                        Forward = 0;
+                    }
+
+                }
+                if (carSurfing > 0.325f && MRDistance < 1.75f)
+                {
+                    Turn = 0.25f;
+                    Forward = 0.5f;
+
+                    if (currentSpeed > 2.5) //Limiting max speed so car can stop when needed
+                    {
+                        Forward = 0;
+                    }
+                }
+            }
+
+            else if (FRDistance == 1.75f && RRDistance < 1.1f && MRDistance < 0.6f) //Guesses that there might be a spot ahead and switches to middle and rear sensors for orientation
+             {
+                 parkApproach = RRDistance - MRDistance;
+
+                 if (parkApproach < 0.2f && parkApproach > 0.17f) //0.175
+                 { 
+                     Turn = 0.25f; //Turn right
+                 }
+                 if (parkApproach > 0.22f) //0.2
+                 {
+                     Turn = -0.25f; //Turn left
+                 }
+
+             }
+             
+        }
+
+
+        if (FDistance == 3.4f && FRDistance == 1.75 && FLDistance == 1.75 && spotFound == false && beginParking == false && finalApproach == false) //Begins looking for a place to park -> moves forward at constant speed
+        {
+            Forward = 0.5f;
+            if (currentSpeed > 2.25) //Limiting max speed so car can stop when needed
+            {
+                Forward = 0;
+            }
+        }
+
+
+        if (RRDistance < 1.75 && FRDistance < 1.75 && MRDistance == 1.75 && beginParking == false && finalApproach == false) //Available parking spot found
+        {
+            spotFound = true;
+        }
+
+        if (spotFound == true && MRDistance < 1.75 && RRDistance < 1.75 && currentSpeed > 0 && beginParking == false && finalApproach == false) //Continues until it is finds it's reference point on the car in front of the parking space
+        {
+            Forward = 0;
+            Brake = 1;
+
+            if (currentSpeed < 0.01)
+            {
+                beginParking = true;
+            }
+        }
+
+        if (beginParking == true && currentSpeed <= 0 && finalApproach == false) //Begins parking procedure by moving backwards
+        {
+            Brake = 0;
+            Forward = -0.2f; //-0.05f works but seems slower than necessary
+
+            origin = transform.position; //Setting reference point for parking maneuver
+            dist = origin.z; //Used to determine how far vehicle is from origin in z direction only -> add x direction and waypoints for increased robustness of parking maneuver
+
+            if (dist < -27 && RDistance < 0.5f && currentSpeed < 0 && finalApproach == false) //Checking for obstacles in path and will stop if something triggers rear sensor
+            {
+                Brake = 1;
+            }
+
+            if (dist < -26.75 && Turn == 0 && finalApproach == false) //Begins to turn into  parking spot
+            {
+                Forward = -0.275f;
+                Turn = 1;
+            }
+
+            if (dist <= -30.5 && Turn == 1 && finalApproach == false) //Reverses turn to straighten out vehicle in parking spot
+            {
+                Forward = -0.285f;
+                Turn = -1;
+                if (dist < -32.25)
+                {
+                    Forward = 0;
+                }
+            }
+
+            if (dist <= -32.85 && currentSpeed < 0 && finalApproach == false) //Stops car colliding with vehicle behind it
+            {
+                Turn = 0;
+                Brake = 1;
+
+                if (currentSpeed >= -0.1)
+                {
+                    finalApproach = true;
+                }
+            }
+        }
+
+        if (finalApproach == true) //Centers vehicle in parking spot
+        {
+            positionError = FDistance - RDistance;
+
+            if (positionError > 0.1)
+            {
+                Forward = 0.25f;
+            }
+            else if (positionError < -0.1)
+            {
+                Forward = -0.25f;
+            }
+            else
+            {
+                Brake = 1;                
+            }
+        }
+
+    }
+
+
+    private void Sensors()
+    {
+        RaycastHit hit; //Sensors simulated by using raycast lines
+        Vector3 sensorStartPos = transform.position; //Origin of sensor starts at origin of car and is adjusted accordingly below depending on the desired sensor location
+        sensorStartPos.y += sensorHeight; //Note: x is left and right, z is forward and back, y is up and down -> must be aligned on correctly on scene map
+
+        //Note: Did not offset x and z axes as performance is greatly reduced and produces undesirable effect of sensors sliding and being inaccurate and pretty much useless. 
+        //This produces a graphical transparency issue since you can see the sensor ranges through the car model but performance is perfect. It's worth the trade (can also just turn gizmos off so you can't see the sensors)
+
+
+        //Front Middle Sensor
+        if (Physics.Raycast(sensorStartPos, transform.forward, out hit, frontSensorLength))
+        {
+            Debug.DrawLine(sensorStartPos, hit.point, Color.red); //Drawing sensor line during contact (start, end, color)
+            FDistance = hit.distance - 1.83f; //Measuring distance from sensor location on car to object it collides with
+        }
+        else //Displays sensor range even when not contacting anything
+        {
+            Debug.DrawLine(sensorStartPos, sensorStartPos + (transform.forward * frontSensorLength), Color.green);
+            FDistance = 3.0f;
+        }
+
+
+        //Front Right Sensor
+        if (Physics.Raycast(sensorStartPos, Quaternion.AngleAxis(frontSensorAngle, transform.up) * transform.forward, out hit, frontSideSensorLength))
+        {
+            Debug.DrawLine(sensorStartPos, hit.point, Color.red);
+            FRDistance = hit.distance - 2.16f; //Measuring distance from sensor location on car to object it collides with       
+
+        }
+        else //Displays sensor range even when not contacting anything
+        {
+            Debug.DrawLine(sensorStartPos, sensorStartPos + (Quaternion.AngleAxis(frontSensorAngle, transform.up) * transform.forward * frontSideSensorLength), Color.green);
+            FRDistance = 1.75f;
+        }
+
+
+        //Front Left Sensor
+        if (Physics.Raycast(sensorStartPos, Quaternion.AngleAxis(-frontSensorAngle, transform.up) * transform.forward, out hit, frontSideSensorLength))
+        {
+            Debug.DrawLine(sensorStartPos, hit.point, Color.red);
+            FLDistance = hit.distance - 2.16f; //Measuring distance from sensor location on car to object it collides with
+        }
+        else //Displays sensor range even when not contacting anything
+        {
+            Debug.DrawLine(sensorStartPos, sensorStartPos + (Quaternion.AngleAxis(-frontSensorAngle, transform.up) * transform.forward * frontSideSensorLength), Color.green);
+            FLDistance = 1.75f;
+        }
+
+
+        //Middle Right Sensor
+        if (Physics.Raycast(sensorStartPos, transform.right, out hit, midSensorLength))
+        {
+            Debug.DrawLine(sensorStartPos, hit.point, Color.red); //Drawing sensor line (start, end, color)
+            MRDistance = hit.distance - 1.15f; //Measuring distance from sensor location on car to object it collides with 
+        }
+        else //Displays sensor range even when not contacting anything
+        {
+            Debug.DrawLine(sensorStartPos, sensorStartPos + (transform.right * midSensorLength), Color.green);
+            MRDistance = 1.75f;
+        }
+
+
+        //Middle Left Sensor
+        if (Physics.Raycast(sensorStartPos, -transform.right, out hit, midSensorLength))
+        {
+            Debug.DrawLine(sensorStartPos, hit.point, Color.red); //Drawing sensor line (start, end, color)
+            MLDistance = hit.distance - 1.15f; //Measuring distance from sensor location on car to object it collides with
+        }
+        else //Displays sensor range even when not contacting anything
+        {
+            Debug.DrawLine(sensorStartPos, sensorStartPos + (-transform.right * midSensorLength), Color.green);
+            MLDistance = 1.75f;
+        }
+
+
+        //Rear Middle Sensor
+        if (Physics.Raycast(sensorStartPos, -transform.forward, out hit, rearSensorLength))
+        {
+            Debug.DrawLine(sensorStartPos, hit.point, Color.red); //Drawing sensor line (start, end, color)
+            RDistance = hit.distance - 2.6f; //Measuring distance from sensor location on car to object it collides with
+        }
+        else //Displays sensor range even when not contacting anything
+        {
+            Debug.DrawLine(sensorStartPos, sensorStartPos + (-transform.forward * rearSensorLength), Color.green);
+            RDistance = 3.0f;
+        }
+
+
+        //Rear Right Sensor
+        if (Physics.Raycast(sensorStartPos, Quaternion.AngleAxis(rearSensorAngle, transform.up) * transform.forward, out hit, rearSideSensorLength))
+        {
+            Debug.DrawLine(sensorStartPos, hit.point, Color.red);
+            RRDistance = hit.distance - 2.84f; //Measuring distance from sensor location on car to object it collides with
+        }
+        else //Displays sensor range even when not contacting anything
+        {
+            Debug.DrawLine(sensorStartPos, sensorStartPos + (Quaternion.AngleAxis(rearSensorAngle, transform.up) * transform.forward * rearSideSensorLength), Color.green);
+            RRDistance = 1.75f;
+        }
+
+
+        //Rear Left Sensor
+        if (Physics.Raycast(sensorStartPos, Quaternion.AngleAxis(-rearSensorAngle, transform.up) * transform.forward, out hit, rearSideSensorLength))
+        {
+            Debug.DrawLine(sensorStartPos, hit.point, Color.red);
+            RLDistance = hit.distance - 2.84f; //Measuring distance from sensor location on car to object it collides with
+        }
+        else //Displays sensor range even when not contacting anything
+        {
+            Debug.DrawLine(sensorStartPos, sensorStartPos + (Quaternion.AngleAxis(-rearSensorAngle, transform.up) * transform.forward * rearSideSensorLength), Color.green);
+            RLDistance = 1.75f;
+        }
+
+    } //Version 1 of sensor array -> single line ray cast
+
+    private void ConeSensors() //Version 2 of sensor array -> cone sensors with realistic ranges. Must extract variables from other scripts to work properly which is what this function does.
+    {
+        //Extracting distance variables from appropriate cone sensor scripts
+        MRDistance = GameObject.Find("MR Sensor").GetComponent<Cone_Sensors>().MRDistance; //GameObject.Find("*Object Name*").GetComponent<*Script attached to object*>().*Name of variable you want to extract*;
+        FRDistance = GameObject.Find("FR Sensor").GetComponent<FR_Cone_Sensor>().FRDistance;
+        FDistance = GameObject.Find("F Sensor").GetComponent<F_Cone_Sensor>().FDistance;
+        FLDistance = GameObject.Find("FL Sensor").GetComponent<FL_Cone_Sensor>().FLDistance;
+        MLDistance = GameObject.Find("ML Sensor").GetComponent<ML_Cone_Sensor>().MLDistance;
+        RDistance = GameObject.Find("R Sensor").GetComponent<R_Cone_Sensor>().RDistance;
+        RRDistance = GameObject.Find("RR Sensor").GetComponent<RR_Cone_Sensor>().RRDistance;
+        RLDistance = GameObject.Find("RL Sensor").GetComponent<RL_Cone_Sensor>().RLDistance;
+    }
+
+    void Update()
+    {
+       
+
+        //Wheel motion
+        Quaternion flq; //Rotation of wheel collider
+        Vector3 flv; //Position of wheel collider
+        FL_Wheel.GetWorldPose(out flv, out flq); //Get wheel collider position and rotation
+        FL.transform.position = flv;
+        FL.transform.rotation = flq;
+
+        Quaternion Blq; //Rotation of wheel collider
+        Vector3 Blv; //Position of wheel collider
+        RL_Wheel.GetWorldPose(out Blv, out Blq); //Get wheel collider position and rotation
+        RL.transform.position = Blv;
+        RL.transform.rotation = Blq;
+        
+        Quaternion fRq; //Rotation of wheel collider
+        Vector3 fRv; //Position of wheel collider
+        FR_Wheel.GetWorldPose(out fRv, out fRq); //Get wheel collider position and rotation
+        FR.transform.position = fRv;
+        FR.transform.rotation = fRq;
+        
+        Quaternion BRq; //Rotation of wheel collider
+        Vector3 BRv; //Position of wheel collider
+        RR_Wheel.GetWorldPose(out BRv, out BRq); //Get wheel collider position and rotation
+        RR.transform.position = BRv;
+        RR.transform.rotation = BRq;
+        
+    }
+}
